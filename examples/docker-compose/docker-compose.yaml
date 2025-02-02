@@ -18,9 +18,10 @@ services:
       - db_data:/var/lib/mysql
 
   postfix:
+    #image: technicalguru/mailserver-postfix
     build:
-      dockerfile: postfix.Dockerfile
       context: ./src
+      target: postfix
     container_name: mailserver_postfix
     restart: unless-stopped
     depends_on:
@@ -30,14 +31,15 @@ services:
     environment:
       PF_SETUP_PASS: ${MYSQL_ROOT_PASSWORD}
       PF_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
-      PF_MYDOMAIN: ${MAIL_SERVER_HOST}
+      PF_MYHOSTNAME: ${MAIL_SERVER_HOST}
+      PF_MYDOMAIN:  ${MAIL_SERVER_HOST}
     ports:
       - "25:25"
       - "465:465"
       - "587:587"
     volumes:
-      # - ./config/certs:/etc/ssl/certs
       - postfix_data:/var/vmail
+      - ./config/certs:/etc/ssl/certs
       - ./config/postfix:/etc/postfix
 
   opendkim:
@@ -54,42 +56,45 @@ services:
       - opendkim_data:/etc/opendkim
 
   amavis:
-    image: technicalguru/mailserver-amavis
+    #image: technicalguru/mailserver-amavis
+    build:
+      context: ./src
+      target: amavis
     container_name: mailserver_amavis
     restart: unless-stopped
-    ports:
-      - "10024:10024"
-    environment:
-      - AMAVIS_LOGLEVEL=1
+    env_file: ./config/amavis.env
+    volumes:
+      - ./data/amavis/clamav:/var/lib/clamav
+      - ./config/amavis:/usr/local/amavis/templates/amavis
 
   postfixadmin:
     #image: technicalguru/mailserver-postfixadmin
     build:
-      dockerfile: postfixadmin.Dockerfile
       context: ./src
+      target: postfixadmin
     container_name: mailserver_postfixadmin
     restart: unless-stopped
     depends_on:
       - postfix
     env_file: ./config/postfixadmin.env
     environment:
+      DB_ROOT_PASS: ${MYSQL_ROOT_PASSWORD}
       PFA_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
-    volumes:
-      # - ./config/certs:/etc/ssl/certs
-      - postfix_data:/var/vmail
-      - ./src/config_setup:/var/www/html/config_setup
     ports:
       - "9080:80"
 
   roundcube:
     #image: technicalguru/mailserver-roundcube
     build:
-      dockerfile: roundcube.Dockerfile
       context: ./src
+      target: roundcube
+    container_name: mailserver_roundcube
     restart: unless-stopped
     depends_on:
       - postfix
     env_file: ./config/roundcube.env
+    environment:
+      DB_ROOT_PASS: ${MYSQL_ROOT_PASSWORD}
     ports:
       - "6080:80"
 
@@ -112,3 +117,10 @@ volumes:
       type: none
       o: bind
       device: ./data/opendkim
+
+networks:
+  default:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.16.23.0/24
