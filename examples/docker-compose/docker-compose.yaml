@@ -35,12 +35,14 @@ services:
       PF_MYDOMAIN:  ${MAIL_SERVER_HOST}
     ports:
       - "25:25"
+      - "143:143"
+      - "993:993"
       - "465:465"
       - "587:587"
     volumes:
       - postfix_data:/var/vmail
       - ./config/certs:/etc/ssl/certs
-      - ./config/postfix:/etc/postfix
+      - ./config/postfix:/usr/local/mailserver/templates/postfix
 
   opendkim:
     image: technicalguru/mailserver-opendkim
@@ -57,15 +59,16 @@ services:
 
   amavis:
     #image: technicalguru/mailserver-amavis
-    build:
-      context: ./src
-      target: amavis
+    build: https://github.com/nelu/docker-mailserver-amavis.git
+#    build:
+#      context: ./src
+#      target: amavis
     container_name: mailserver_amavis
     restart: unless-stopped
     env_file: ./config/amavis.env
     volumes:
       - ./data/amavis/clamav:/var/lib/clamav
-      - ./config/amavis:/usr/local/amavis/templates/amavis
+      #- ./config/amavis:/usr/local/amavis/templates/amavis
 
   postfixadmin:
     #image: technicalguru/mailserver-postfixadmin
