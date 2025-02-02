@@ -1,0 +1,16 @@
+#!/usr/local/bin/php -q
+<?php
+include __DIR__ . '/config/config.inc.php';
+
+$prefix = $argv[1] ?? "RC_";
+
+$conn = new mysqli(getenv("${prefix}DB_HOST"), getenv("${prefix}DB_USER"), getenv("${prefix}DB_PASS"));
+
+if ($conn->connect_error) {
+    print("Connection failed: " . $conn->connect_error);
+    exit(1);
+}
+
+$conn->query("CREATE DATABASE IF NOT EXISTS " . getenv("${prefix}DB_NAME"));
+$conn->close();
+
