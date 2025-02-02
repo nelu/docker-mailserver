@@ -1,0 +1,102 @@
+
+services:
+  database:
+    image: mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MARIADB_DATABASE: postfix
+      MARIADB_USER: postfix
+      MARIADB_PASSWORD: ${MYSQL_POSTFIX_USER_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 5s
+      interval: 5s
+      timeout: 5s
+      retries: 55
+    volumes:
+      - db_data:/var/lib/mysql
+
+  postfix:
+    build: ./
+    container_name: mailserver_postfix
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    env_file: ./config/postfix.env
+    environment:
+      PF_SETUP_PASS: ${MYSQL_ROOT_PASSWORD}
+      PF_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
+      PF_MYDOMAIN: ${MAIL_SERVER_HOST}
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+    volumes:
+      # - ./config/certs:/etc/ssl/certs
+      - postfix_data:/var/vmail
+      - ./config/postfix:/etc/postfix
+
+  opendkim:
+    image: technicalguru/mailserver-opendkim
+    container_name: mailserver_opendkim
+    restart: unless-stopped
+    depends_on:
+      - postfix
+    environment:
+      DKIM_SETUP_PASS: ${MYSQL_ROOT_PASSWORD}
+      DKIM_DB_HOST: database
+      DKIM_DOMAIN: ${MAIL_SERVER_HOST}
+    volumes:
+      - opendkim_data:/etc/opendkim
+
+  amavis:
+    image: technicalguru/mailserver-amavis
+    container_name: mailserver_amavis
+    restart: unless-stopped
+    ports:
+      - "10024:10024"
+    environment:
+      - AMAVIS_LOGLEVEL=1
+
+  postfixadmin:
+    image: technicalguru/mailserver-postfixadmin
+    container_name: mailserver_postfixadmin
+    restart: unless-stopped
+    depends_on:
+      - postfix
+    env_file: ./config/postfixadmin.env
+    environment:
+      PFA_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
+    ports:
+      - "9080:80"
+
+  roundcube:
+    image: technicalguru/mailserver-roundcube
+    restart: unless-stopped
+    depends_on:
+      - postfix
+    env_file: ./config/roundcube.env
+    ports:
+      - "6080:80"
+
+volumes:
+  db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/db
+  postfix_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postfix
+  opendkim_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/opendkim
