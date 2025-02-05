@@ -1,13 +1,13 @@
 
 services:
   database:
-    image: mariadb
+    image: mariadb:10.5
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MARIADB_DATABASE: postfix
-      MARIADB_USER: postfix
-      MARIADB_PASSWORD: ${MYSQL_POSTFIX_USER_PASSWORD}
+      MARIADB_USER: ${MYSQL_POSTFIX_USER}
+      MARIADB_PASSWORD: ${MYSQL_POSTFIX_PASSWORD}
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       start_period: 5s
@@ -16,13 +16,11 @@ services:
       retries: 55
     volumes:
       - db_data:/var/lib/mysql
+    labels:
+      - "traefik.enable=false"
 
   postfix:
-    #image: technicalguru/mailserver-postfix
-    build:
-      context: ./src
-      target: postfix
-    container_name: mailserver_postfix
+    image: ghcr.io/nelu/mailserver-postfix:latest
     restart: unless-stopped
     depends_on:
       database:
@@ -30,23 +28,24 @@ services:
     env_file: ./config/postfix.env
     environment:
       PF_SETUP_PASS: ${MYSQL_ROOT_PASSWORD}
-      PF_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
+      PF_DB_USER: ${MYSQL_POSTFIX_USER}
+      PF_DB_PASS: ${MYSQL_POSTFIX_PASSWORD}
       PF_MYHOSTNAME: ${MAIL_SERVER_HOST}
-      PF_MYDOMAIN:  ${MAIL_SERVER_HOST}
+      PF_MYDOMAIN:  ${MAIL_SERVER_DOMAIN}
     ports:
       - "25:25"
       - "143:143"
-      - "993:993"
-      - "465:465"
       - "587:587"
+      - "993:993"
     volumes:
       - postfix_data:/var/vmail
       - ./config/certs:/etc/ssl/certs
       - ./config/postfix:/usr/local/mailserver/templates/postfix
+    labels:
+      - "traefik.enable=false"
 
   opendkim:
     image: technicalguru/mailserver-opendkim
-    container_name: mailserver_opendkim
     restart: unless-stopped
     depends_on:
       - postfix
@@ -56,50 +55,100 @@ services:
       DKIM_DOMAIN: ${MAIL_SERVER_HOST}
     volumes:
       - opendkim_data:/etc/opendkim
+    labels:
+      - "traefik.enable=false"
 
   amavis:
-    #image: technicalguru/mailserver-amavis
-    build: https://github.com/nelu/docker-mailserver-amavis.git
-#    build:
-#      context: ./src
-#      target: amavis
-    container_name: mailserver_amavis
+    image: ghcr.io/nelu/mailserver-amavis
     restart: unless-stopped
     env_file: ./config/amavis.env
+    environment:
+      AV_MYDOMAIN: ${MAIL_SERVER_HOST}
     volumes:
       - ./data/amavis/clamav:/var/lib/clamav
       #- ./config/amavis:/usr/local/amavis/templates/amavis
+    labels:
+      - "traefik.enable=false"
 
   postfixadmin:
-    #image: technicalguru/mailserver-postfixadmin
-    build:
-      context: ./src
-      target: postfixadmin
-    container_name: mailserver_postfixadmin
+    image: technicalguru/mailserver-postfixadmin
     restart: unless-stopped
     depends_on:
       - postfix
     env_file: ./config/postfixadmin.env
     environment:
       DB_ROOT_PASS: ${MYSQL_ROOT_PASSWORD}
-      PFA_DB_PASS: ${MYSQL_POSTFIX_USER_PASSWORD}
-    ports:
-      - "9080:80"
+      PFA_DB_USER: ${MYSQL_POSTFIX_USER}
+      PFA_DB_PASS: ${MYSQL_POSTFIX_PASSWORD}
+      PFA_ABUSE_EMAIL: "abuse@localhost.com"
+      PFA_HOSTMASTER_EMAIL: "hostmaster@${MAIL_SERVER_DOMAIN}"
+      PFA_POSTMASTER_EMAIL: "postmaster@${MAIL_SERVER_DOMAIN}"
+      PFA_WEBMASTER_EMAIL: "webmaster@${MAIL_SERVER_DOMAIN}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.mailserver-pfa.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.mailserver-pfa-stripprefix.stripprefix.prefixes=/admin"
+      - "traefik.http.routers.mailserver-pfa.priority=30"
+      - "traefik.http.routers.mailserver-pfa.rule=PathPrefix(`/admin/`)"
+      - "traefik.http.routers.mailserver-pfa.middlewares=mailserver-pfa-stripprefix@docker"
 
   roundcube:
-    #image: technicalguru/mailserver-roundcube
-    build:
-      context: ./src
-      target: roundcube
-    container_name: mailserver_roundcube
+    image: ghcr.io/nelu/mailserver-roundcube
     restart: unless-stopped
     depends_on:
       - postfix
     env_file: ./config/roundcube.env
     environment:
       DB_ROOT_PASS: ${MYSQL_ROOT_PASSWORD}
+      RC_DB_USER: ${MYSQL_POSTFIX_USER}
+      RC_DB_PASS: ${MYSQL_POSTFIX_PASSWORD}
+      RC_DEFAULT_DOMAIN: ${MAIL_SERVER_DOMAIN}
+      RC_ENABLE_INSTALLER: 0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.mailserver-rc.loadbalancer.server.port=80"
+      - "traefik.http.routers.mailserver-rc.rule=PathRegexp(`/`)"
+      - "traefik.http.routers.mailserver-rc.priority=20"
+
+  traefik:
+    image: traefik:v3.1 # The official v3 Traefik docker image
+    restart: always
+    # Enables the web UI and tells Traefik to listen to docker for project containers only
+    command:
+      #- "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--accesslog=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entryPoints.web.forwardedHeaders.insecure"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.web.asDefault=true"
+      - "--providers.docker.constraints=Label(`com.docker.compose.project`,`${COMPOSE_PROJECT_NAME}`) && !Label(`com.docker.compose.service`,`traefik`)"
+    environment:
+      - TZ=Europe/Bucharest
+    logging:
+      driver: "json-file"
+      options:
+        max-file: '2'
+        max-size: 10m
+    networks:
+      - default
+      - webproxy
     ports:
-      - "6080:80"
+      # The HTTP port
+      - "9080:80"
+      # The Web UI (enabled by --api.insecure=true)
+      - "9088:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=webgateway_default"
+      - "traefik.http.routers.traefik-mailserver.rule=HostRegexp(`${MAIL_SERVER_HOST}`)"
+      - "traefik.http.routers.traefik-mailserver.priority=50"
+      - "traefik.http.services.traefik-mailserver.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.compress-output.compress=true"
+      - "traefik.http.routers.traefik-mailserver.middlewares=compress-output@docker"
 
 volumes:
   db_data:
@@ -127,3 +176,7 @@ networks:
       driver: default
       config:
         - subnet: 172.16.23.0/24
+
+  webproxy:
+    external: true
+    name: webgateway_default
