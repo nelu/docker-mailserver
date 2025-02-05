@@ -61,6 +61,8 @@ services:
   amavis:
     image: ghcr.io/nelu/mailserver-amavis
     restart: unless-stopped
+    depends_on:
+      - postfix
     env_file: ./config/amavis.env
     environment:
       AV_MYDOMAIN: ${MAIL_SERVER_HOST}
